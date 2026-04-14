@@ -154,25 +154,22 @@ def get_open_positions():
 
 def discover_weather_markets():
     """
-    Pull ALL open climate/weather markets from Kalshi in one call.
+    Scan each known KXHIGH series for open markets.
     Returns dict: series_ticker → list of markets
     """
-    data = kalshi_get("/markets", params={
-        "status":   "open",
-        "limit":    1000,
-    })
-    if not data:
-        return {}
-
     series_map = {}
-    for mkt in data.get("markets", []):
-        series = mkt.get("series_ticker", "")
-        # Filter to temperature markets only
-        if not series.startswith("KXHIGH"):
+    for series_ticker in KNOWN_SERIES.keys():
+        data = kalshi_get("/markets", params={
+            "series_ticker": series_ticker,
+            "status":        "open",
+            "limit":         100,
+        })
+        if not data:
             continue
-        if series not in series_map:
-            series_map[series] = []
-        series_map[series].append(mkt)
+        markets = data.get("markets", [])
+        if markets:
+            series_map[series_ticker] = markets
+            log.info(f"  {series_ticker}: {len(markets)} open markets")
 
     log.info(f"Discovered {len(series_map)} active weather series: {list(series_map.keys())}")
     return series_map
