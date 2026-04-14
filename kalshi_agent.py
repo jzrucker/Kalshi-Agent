@@ -194,123 +194,108 @@ def parse_temp_range(title):
 # Weather cache — populated once per run for all cities
 _weather_cache = {}
 
+# NOAA weather station IDs for each city (airport stations)
+NOAA_STATIONS = {
+    "NYC":          "KNYC",   # Central Park
+    "Chicago":      "KORD",   # O'Hare
+    "Miami":        "KMIA",   # Miami Intl
+    "LA":           "KLAX",   # LAX
+    "Atlanta":      "KATL",   # Hartsfield
+    "Dallas":       "KDFW",   # DFW
+    "Boston":       "KBOS",   # Logan
+    "Phoenix":      "KPHX",   # Sky Harbor
+    "Seattle":      "KSEA",   # SeaTac
+    "Denver":       "KDEN",   # Denver Intl
+    "Houston":      "KIAH",   # Houston Intercontinental
+    "Minneapolis":  "KMSP",   # Minneapolis
+    "Detroit":      "KDTW",   # Detroit Metro
+    "Philadelphia": "KPHL",   # Philadelphia Intl
+    "DC":           "KDCA",   # Reagan National
+    "Charlotte":    "KCLT",   # Charlotte Douglas
+    "Las Vegas":    "KLAS",   # McCarran
+    "Portland":     "KPDX",   # Portland Intl
+    "Nashville":    "KBNA",   # Nashville Intl
+    "Kansas City":  "KMCI",   # Kansas City Intl
+}
+
+
 def fetch_all_weather():
     """
-    Batch fetch weather for all cities in one API call using Open-Meteo
-    multi-location endpoint. Much faster and avoids rate limiting.
+    Fetch weather for all cities using NOAA weather API.
+    api.weather.gov — free, no key, works from GitHub Actions.
+    First gets the forecast office for each station, then gets forecast.
     """
     global _weather_cache
-    try:
-        now_utc = datetime.datetime.utcnow()
-        start   = (now_utc - datetime.timedelta(hours=3)).strftime("%Y-%m-%dT%H:00")
-        end     = now_utc.strftime("%Y-%m-%dT%H:00")
+    for city, station in NOAA_STATIONS.items():
+        try:
+            # Step 1: get gridpoint for station
+            r = requests.get(
+                f"https://api.weather.gov/stations/{station}/observations/latest",
+                headers={"User-Agent": "kalshi-weather-agent/1.0 jzrucker@gmail.com"},
+                timeout=15
+            )
+            if r.status_code != 200:
+                log.warning(f"  NOAA obs error {city}: {r.status_code}")
+                continue
 
-        lats = [str(v[1]) for v in CITIES.values()]
-        lons = [str(v[2]) for v in CITIES.values()]
+            props       = r.json().get("properties", {})
+            temp_c      = props.get("temperature", {}).get("value")
+            timestamp   = props.get("timestamp", "")
 
-        r = requests.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params={
-                "latitude":         ",".join(lats),
-                "longitude":        ",".join(lons),
-                "daily":            "temperature_2m_max",
-                "hourly":           "temperature_2m",
-                "temperature_unit": "fahrenheit",
-                "timezone":         "UTC",
-                "forecast_days":    1,
-                "start_hour":       start,
-                "end_hour":         end,
-            },
-            timeout=30
-        )
+            if temp_c is None:
+                log.warning(f"  NOAA no temp for {city}")
+                continue
 
-        if r.status_code != 200:
-            log.warning(f"Open-Meteo batch error: {r.status_code}")
-            return
+            current_f = temp_c * 9/5 + 32
 
-        results = r.json()
-        # Multi-location returns a list
-        if not isinstance(results, list):
-            results = [results]
-
-        cities_list = list(CITIES.keys())
-        for i, data in enumerate(results):
-            city = cities_list[i]
+            # Age of observation
             try:
-                forecast_max = data["daily"]["temperature_2m_max"][0]
-                hourly_temps = data["hourly"]["temperature_2m"]
-                hourly_times = data["hourly"]["time"]
+                obs_time    = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                now_utc     = datetime.datetime.now(datetime.timezone.utc)
+                age_minutes = int((now_utc - obs_time).total_seconds() / 60)
+            except Exception:
+                age_minutes = 60
 
-                current_obs = None
-                age_minutes = 999
-                for j in range(len(hourly_temps) - 1, -1, -1):
-                    if hourly_temps[j] is not None:
-                        obs_time    = datetime.datetime.fromisoformat(hourly_times[j])
-                        age_minutes = int((now_utc - obs_time).total_seconds() / 60)
-                        current_obs = hourly_temps[j]
-                        break
+            # Step 2: get forecast for this station
+            lat, lon = CITY_COORDS.get(city, (None, None))
+            forecast_max = None
+            if lat and lon:
+                try:
+                    pt = requests.get(
+                        f"https://api.weather.gov/points/{lat},{lon}",
+                        headers={"User-Agent": "kalshi-weather-agent/1.0 jzrucker@gmail.com"},
+                        timeout=15
+                    )
+                    if pt.status_code == 200:
+                        forecast_url = pt.json()["properties"]["forecast"]
+                        fc = requests.get(
+                            forecast_url,
+                            headers={"User-Agent": "kalshi-weather-agent/1.0 jzrucker@gmail.com"},
+                            timeout=15
+                        )
+                        if fc.status_code == 200:
+                            periods = fc.json()["properties"]["periods"]
+                            # Find today's daytime high
+                            for p in periods[:3]:
+                                if p.get("isDaytime", False):
+                                    forecast_max = p["temperature"]
+                                    break
+                except Exception as fe:
+                    log.warning(f"  NOAA forecast error {city}: {fe}")
 
-                _weather_cache[city] = (forecast_max, current_obs, age_minutes)
-                log.info(f"  Weather fetched: {city} max={forecast_max:.1f}F obs={current_obs}F age={age_minutes}min")
-            except Exception as e:
-                log.warning(f"  Weather parse error {city}: {e}")
+            if forecast_max is None:
+                forecast_max = current_f + 5  # rough estimate if no forecast
 
-    except Exception as e:
-        log.warning(f"Batch weather fetch error: {e}")
+            _weather_cache[city] = (forecast_max, current_f, age_minutes)
+            log.info(f"  {city}: obs={current_f:.1f}F forecast_max={forecast_max:.1f}F age={age_minutes}min")
+
+        except Exception as e:
+            log.warning(f"  NOAA error {city}: {e}")
 
 
 def get_weather(city, lat, lon):
-    """
-    Returns (forecast_max_f, current_obs_f, data_age_minutes).
-    Uses cached data from fetch_all_weather().
-    Falls back to individual call if not in cache.
-    """
-    if city in _weather_cache:
-        return _weather_cache[city]
-
-    # Fallback individual call
-    try:
-        now_utc = datetime.datetime.utcnow()
-        start   = (now_utc - datetime.timedelta(hours=3)).strftime("%Y-%m-%dT%H:00")
-        end     = now_utc.strftime("%Y-%m-%dT%H:00")
-
-        r = requests.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params={
-                "latitude":         lat,
-                "longitude":        lon,
-                "daily":            "temperature_2m_max",
-                "hourly":           "temperature_2m",
-                "temperature_unit": "fahrenheit",
-                "timezone":         "UTC",
-                "forecast_days":    1,
-                "start_hour":       start,
-                "end_hour":         end,
-            },
-            timeout=30
-        )
-        if r.status_code != 200:
-            return None, None, None
-
-        data         = r.json()
-        forecast_max = data["daily"]["temperature_2m_max"][0]
-        hourly_temps = data["hourly"]["temperature_2m"]
-        hourly_times = data["hourly"]["time"]
-
-        current_obs = None
-        age_minutes = 999
-        for i in range(len(hourly_temps) - 1, -1, -1):
-            if hourly_temps[i] is not None:
-                obs_time    = datetime.datetime.fromisoformat(hourly_times[i])
-                age_minutes = int((now_utc - obs_time).total_seconds() / 60)
-                current_obs = hourly_temps[i]
-                break
-
-        return forecast_max, current_obs, age_minutes
-
-    except Exception as e:
-        log.warning(f"Weather fallback error ({city}): {e}")
-        return None, None, None
+    """Returns (forecast_max_f, current_obs_f, data_age_minutes) from cache."""
+    return _weather_cache.get(city, (None, None, None))
 
 
 # ── Edge Calculation ──────────────────────────────────────────────────────────
