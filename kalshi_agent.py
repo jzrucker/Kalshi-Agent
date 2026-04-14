@@ -23,6 +23,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import padding
+from urllib.parse import urlparse
 from cryptography.hazmat.backends import default_backend
 import base64
 
@@ -83,14 +84,23 @@ def get_kalshi_headers(method, path):
             password=None,
             backend=default_backend()
         )
-        ts  = str(int(time.time() * 1000))
-        msg = ts + method.upper() + path
-        sig = private_key.sign(msg.encode(), padding.PKCS1v15(), hashes.SHA256())
+        ts = str(int(time.time() * 1000))
+        # Strip query params, use full path including /trade-api/v2
+        sign_path = urlparse(KALSHI_BASE + path).path
+        msg = f"{ts}{method.upper()}{sign_path}".encode("utf-8")
+        sig = private_key.sign(
+            msg,
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.DIGEST_LENGTH
+            ),
+            hashes.SHA256()
+        )
         return {
-            "Content-Type":            "application/json",
-            "KALSHI-ACCESS-KEY":       KALSHI_KEY_ID,
-            "KALSHI-ACCESS-TIME":      ts,
-            "KALSHI-ACCESS-SIGNATURE": base64.b64encode(sig).decode(),
+            "Content-Type":              "application/json",
+            "KALSHI-ACCESS-KEY":         KALSHI_KEY_ID,
+            "KALSHI-ACCESS-TIMESTAMP":   ts,
+            "KALSHI-ACCESS-SIGNATURE":   base64.b64encode(sig).decode(),
         }
     except Exception as e:
         log.error(f"Auth error: {e}")
