@@ -191,11 +191,84 @@ def parse_temp_range(title):
 
 # ── Weather Data ──────────────────────────────────────────────────────────────
 
-def get_weather(lat, lon):
+# Weather cache — populated once per run for all cities
+_weather_cache = {}
+
+def fetch_all_weather():
+    """
+    Batch fetch weather for all cities in one API call using Open-Meteo
+    multi-location endpoint. Much faster and avoids rate limiting.
+    """
+    global _weather_cache
+    try:
+        now_utc = datetime.datetime.utcnow()
+        start   = (now_utc - datetime.timedelta(hours=3)).strftime("%Y-%m-%dT%H:00")
+        end     = now_utc.strftime("%Y-%m-%dT%H:00")
+
+        lats = [str(v[1]) for v in CITIES.values()]
+        lons = [str(v[2]) for v in CITIES.values()]
+
+        r = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude":         ",".join(lats),
+                "longitude":        ",".join(lons),
+                "daily":            "temperature_2m_max",
+                "hourly":           "temperature_2m",
+                "temperature_unit": "fahrenheit",
+                "timezone":         "UTC",
+                "forecast_days":    1,
+                "start_hour":       start,
+                "end_hour":         end,
+            },
+            timeout=30
+        )
+
+        if r.status_code != 200:
+            log.warning(f"Open-Meteo batch error: {r.status_code}")
+            return
+
+        results = r.json()
+        # Multi-location returns a list
+        if not isinstance(results, list):
+            results = [results]
+
+        cities_list = list(CITIES.keys())
+        for i, data in enumerate(results):
+            city = cities_list[i]
+            try:
+                forecast_max = data["daily"]["temperature_2m_max"][0]
+                hourly_temps = data["hourly"]["temperature_2m"]
+                hourly_times = data["hourly"]["time"]
+
+                current_obs = None
+                age_minutes = 999
+                for j in range(len(hourly_temps) - 1, -1, -1):
+                    if hourly_temps[j] is not None:
+                        obs_time    = datetime.datetime.fromisoformat(hourly_times[j])
+                        age_minutes = int((now_utc - obs_time).total_seconds() / 60)
+                        current_obs = hourly_temps[j]
+                        break
+
+                _weather_cache[city] = (forecast_max, current_obs, age_minutes)
+                log.info(f"  Weather fetched: {city} max={forecast_max:.1f}F obs={current_obs}F age={age_minutes}min")
+            except Exception as e:
+                log.warning(f"  Weather parse error {city}: {e}")
+
+    except Exception as e:
+        log.warning(f"Batch weather fetch error: {e}")
+
+
+def get_weather(city, lat, lon):
     """
     Returns (forecast_max_f, current_obs_f, data_age_minutes).
-    Uses Open-Meteo — free, no API key, updates hourly.
+    Uses cached data from fetch_all_weather().
+    Falls back to individual call if not in cache.
     """
+    if city in _weather_cache:
+        return _weather_cache[city]
+
+    # Fallback individual call
     try:
         now_utc = datetime.datetime.utcnow()
         start   = (now_utc - datetime.timedelta(hours=3)).strftime("%Y-%m-%dT%H:00")
@@ -204,17 +277,17 @@ def get_weather(lat, lon):
         r = requests.get(
             "https://api.open-meteo.com/v1/forecast",
             params={
-                "latitude":          lat,
-                "longitude":         lon,
-                "daily":             "temperature_2m_max",
-                "hourly":            "temperature_2m",
-                "temperature_unit":  "fahrenheit",
-                "timezone":          "UTC",
-                "forecast_days":     1,
-                "start_hour":        start,
-                "end_hour":          end,
+                "latitude":         lat,
+                "longitude":        lon,
+                "daily":            "temperature_2m_max",
+                "hourly":           "temperature_2m",
+                "temperature_unit": "fahrenheit",
+                "timezone":         "UTC",
+                "forecast_days":    1,
+                "start_hour":       start,
+                "end_hour":         end,
             },
-            timeout=10
+            timeout=30
         )
         if r.status_code != 200:
             return None, None, None
@@ -224,9 +297,8 @@ def get_weather(lat, lon):
         hourly_temps = data["hourly"]["temperature_2m"]
         hourly_times = data["hourly"]["time"]
 
-        # Most recent observed temp
         current_obs = None
-        age_minutes = None
+        age_minutes = 999
         for i in range(len(hourly_temps) - 1, -1, -1):
             if hourly_temps[i] is not None:
                 obs_time    = datetime.datetime.fromisoformat(hourly_times[i])
@@ -237,7 +309,7 @@ def get_weather(lat, lon):
         return forecast_max, current_obs, age_minutes
 
     except Exception as e:
-        log.warning(f"Weather API error ({lat},{lon}): {e}")
+        log.warning(f"Weather fallback error ({city}): {e}")
         return None, None, None
 
 
@@ -350,6 +422,10 @@ def run():
     log.info(f"Min edge:   {MIN_EDGE*100:.0f}%")
 
     hour_utc     = datetime.datetime.utcnow().hour
+
+    log.info("Fetching weather data for all cities...")
+    fetch_all_weather()
+
     trades_placed = []
     skipped_count = 0
 
@@ -365,7 +441,7 @@ def run():
 
         log.info(f"\n── {city} ({series_ticker}) ──")
 
-        forecast_max, current_obs, age_min = get_weather(lat, lon)
+        forecast_max, current_obs, age_min = get_weather(city, lat, lon)
 
         if forecast_max is None:
             log.warning(f"  No weather data — skip")
