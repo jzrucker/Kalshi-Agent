@@ -47,32 +47,35 @@ EMAIL_TO         = "jzrucker@gmail.com"
 # Position sizing
 MAX_POSITION     = 25.00    # max $ per single trade
 MAX_DEPLOYED_PCT = 1.0      # deploy up to 100% of portfolio
-MIN_EDGE         = 0.05     # 5% minimum edge to trade
+MIN_EDGE         = 0.03     # 5% minimum edge to trade
 MAX_POSITIONS    = 20       # max simultaneous open positions
-MAX_DATA_AGE_MIN = 90       # skip if forecast data older than 90 minutes
+MAX_DATA_AGE_MIN = 180       # skip if forecast data older than 90 minutes
 
-# Cities: name → (kalshi_series_ticker, lat, lon)
-CITIES = {
-    "NYC":          ("KXHIGHNY",   40.7829, -73.9654),
-    "Chicago":      ("KXHIGHCHI",  41.9742, -87.9073),
-    "Miami":        ("KXHIGHMIA",  25.7959, -80.2870),
-    "LA":           ("KXHIGHLA",   33.9425, -118.4081),
-    "Atlanta":      ("KXHIGHATL",  33.6407, -84.4277),
-    "Dallas":       ("KXHIGHDAL",  32.8998, -97.0403),
-    "Boston":       ("KXHIGHBOS",  42.3656, -71.0096),
-    "Phoenix":      ("KXHIGHPHX",  33.4373, -112.0078),
-    "Seattle":      ("KXHIGHSEA",  47.4502, -122.3088),
-    "Denver":       ("KXHIGHDEN",  39.8561, -104.6737),
-    "Houston":      ("KXHIGHHOU",  29.9902, -95.3368),
-    "Minneapolis":  ("KXHIGHMSP",  44.8848, -93.2223),
-    "Detroit":      ("KXHIGHDTW",  42.2162, -83.3554),
-    "Philadelphia": ("KXHIGHPHL",  39.8729, -75.2437),
-    "DC":           ("KXHIGHDCA",  38.8521, -77.0377),
-    "Charlotte":    ("KXHIGHCLT",  35.2140, -80.9431),
-    "Las Vegas":    ("KXHIGHLАС",  36.0840, -115.1537),
-    "Portland":     ("KXHIGHPDX",  45.5898, -122.5951),
-    "Nashville":    ("KXHIGHNSH",  36.1245, -86.6782),
-    "Kansas City":  ("KXHIGHKCI",  39.2976, -94.7139),
+# Known series tickers → city name + NOAA station
+# Agent also discovers NEW series dynamically at runtime
+KNOWN_SERIES = {
+    "KXHIGHNY":      ("NYC",          "KNYC",  40.7829, -73.9654),
+    "KXHIGHCHI":     ("Chicago",      "KMDW",  41.7868, -87.7522),  # Midway
+    "KXHIGHMIA":     ("Miami",        "KMIA",  25.7959, -80.2870),
+    "KXHIGHLA":      ("LA",           "KLAX",  33.9425, -118.4081),
+    "KXHIGHATL":     ("Atlanta",      "KATL",  33.6407, -84.4277),
+    "KXHIGHDAL":     ("Dallas",       "KDFW",  32.8998, -97.0403),
+    "KXHIGHBOS":     ("Boston",       "KBOS",  42.3656, -71.0096),
+    "KXHIGHPHX":     ("Phoenix",      "KPHX",  33.4373, -112.0078),
+    "KXHIGHSEA":     ("Seattle",      "KSEA",  47.4502, -122.3088),
+    "KXHIGHDEN":     ("Denver",       "KDEN",  39.8561, -104.6737),
+    "KXHIGHHOU":     ("Houston",      "KIAH",  29.9902, -95.3368),
+    "KXHIGHMSP":     ("Minneapolis",  "KMSP",  44.8848, -93.2223),
+    "KXHIGHDTW":     ("Detroit",      "KDTW",  42.2162, -83.3554),
+    "KXHIGHPHL":     ("Philadelphia", "KPHL",  39.8729, -75.2437),
+    "KXHIGHDCA":     ("DC",           "KDCA",  38.8521, -77.0377),
+    "KXHIGHCLT":     ("Charlotte",    "KCLT",  35.2140, -80.9431),
+    "KXHIGHLAS":     ("Las Vegas",    "KLAS",  36.0840, -115.1537),
+    "KXHIGHPDX":     ("Portland",     "KPDX",  45.5898, -122.5951),
+    "KXHIGHNSH":     ("Nashville",    "KBNA",  36.1245, -86.6782),
+    "KXHIGHKCI":     ("Kansas City",  "KMCI",  39.2976, -94.7139),
+    "KXHIGHAUSTIN":  ("Austin",       "KAUS",  30.1945, -97.6699),
+    "KXHIGHAUS":     ("Austin",       "KAUS",  30.1945, -97.6699),
 }
 
 # ── Kalshi Auth ───────────────────────────────────────────────────────────────
@@ -149,6 +152,32 @@ def get_open_positions():
 
 # ── Market Data ───────────────────────────────────────────────────────────────
 
+def discover_weather_markets():
+    """
+    Pull ALL open climate/weather markets from Kalshi in one call.
+    Returns dict: series_ticker → list of markets
+    """
+    data = kalshi_get("/markets", params={
+        "status":   "open",
+        "limit":    1000,
+    })
+    if not data:
+        return {}
+
+    series_map = {}
+    for mkt in data.get("markets", []):
+        series = mkt.get("series_ticker", "")
+        # Filter to temperature markets only
+        if not series.startswith("KXHIGH"):
+            continue
+        if series not in series_map:
+            series_map[series] = []
+        series_map[series].append(mkt)
+
+    log.info(f"Discovered {len(series_map)} active weather series: {list(series_map.keys())}")
+    return series_map
+
+
 def get_weather_markets(series_ticker):
     data = kalshi_get("/markets", params={
         "series_ticker": series_ticker,
@@ -194,29 +223,12 @@ def parse_temp_range(title):
 # Weather cache — populated once per run for all cities
 _weather_cache = {}
 
-# NOAA weather station IDs for each city (airport stations)
-NOAA_STATIONS = {
-    "NYC":          "KNYC",   # Central Park
-    "Chicago":      "KORD",   # O'Hare
-    "Miami":        "KMIA",   # Miami Intl
-    "LA":           "KLAX",   # LAX
-    "Atlanta":      "KATL",   # Hartsfield
-    "Dallas":       "KDFW",   # DFW
-    "Boston":       "KBOS",   # Logan
-    "Phoenix":      "KPHX",   # Sky Harbor
-    "Seattle":      "KSEA",   # SeaTac
-    "Denver":       "KDEN",   # Denver Intl
-    "Houston":      "KIAH",   # Houston Intercontinental
-    "Minneapolis":  "KMSP",   # Minneapolis
-    "Detroit":      "KDTW",   # Detroit Metro
-    "Philadelphia": "KPHL",   # Philadelphia Intl
-    "DC":           "KDCA",   # Reagan National
-    "Charlotte":    "KCLT",   # Charlotte Douglas
-    "Las Vegas":    "KLAS",   # McCarran
-    "Portland":     "KPDX",   # Portland Intl
-    "Nashville":    "KBNA",   # Nashville Intl
-    "Kansas City":  "KMCI",   # Kansas City Intl
-}
+# NOAA stations derived from KNOWN_SERIES at runtime
+def get_noaa_station(city):
+    for series, info in KNOWN_SERIES.items():
+        if info[0] == city:
+            return info[1]
+    return None
 
 
 def fetch_all_weather():
@@ -228,7 +240,12 @@ def fetch_all_weather():
     global _weather_cache
     now_utc = datetime.datetime.now(datetime.timezone.utc)
 
-    for city, station in NOAA_STATIONS.items():
+    seen = set()
+    for series, info in KNOWN_SERIES.items():
+        city, station, lat, lon = info
+        if city in seen:
+            continue
+        seen.add(city)
         try:
             r = requests.get(
                 f"https://api.weather.gov/stations/{station}/observations/latest",
@@ -399,7 +416,12 @@ def run():
     trades_placed = []
     skipped_count = 0
 
-    for city, (series_ticker, lat, lon) in CITIES.items():
+    # Discover all active weather series dynamically
+    all_series = discover_weather_markets()
+    if not all_series:
+        log.warning("No weather markets found — check API connection")
+
+    for series_ticker, markets in all_series.items():
 
         if len(positions) + len(trades_placed) >= MAX_POSITIONS:
             log.info("Max positions reached — stopping scan")
@@ -409,9 +431,19 @@ def run():
             log.info("Max deployed — stopping scan")
             break
 
-        log.info(f"\n── {city} ({series_ticker}) ──")
+        # Look up city info from known series
+        city_info = KNOWN_SERIES.get(series_ticker)
+        if city_info:
+            city, noaa_station, lat, lon = city_info
+        else:
+            # Unknown series — try to extract city from ticker
+            city = series_ticker.replace("KXHIGH", "")
+            noaa_station = None
+            lat, lon = None, None
 
-        forecast_max, current_obs, age_min = get_weather(city, lat, lon)
+        log.info(f"\n── {city} ({series_ticker}) | {len(markets)} markets ──")
+
+        forecast_max, current_obs, age_min = get_weather(city, lat, lon) if lat else (None, None, None)
 
         if forecast_max is None:
             log.warning(f"  No weather data — skip")
@@ -423,11 +455,6 @@ def run():
 
         obs_str = f"{current_obs:.1f}°F ({age_min}min ago)" if current_obs else "n/a"
         log.info(f"  Forecast max: {forecast_max:.1f}°F | Current obs: {obs_str}")
-
-        markets = get_weather_markets(series_ticker)
-        if not markets:
-            log.warning(f"  No open markets")
-            continue
 
         log.info(f"  {len(markets)} open markets")
 
