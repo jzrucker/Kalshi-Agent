@@ -43,7 +43,7 @@ EMAIL_PASSWORD  = os.environ.get("EMAIL_PASSWORD", "")
 EMAIL_TO        = "jzrucker@gmail.com"
 
 MAX_POSITION    = 25.00   # max $ per trade
-MIN_EDGE        = 0.00    # 3% minimum edge
+MIN_EDGE        = 0.03    # 3% minimum edge
 MAX_POSITIONS   = 20      # max simultaneous positions
 MAX_DATA_AGE    = 180     # minutes
 
@@ -150,64 +150,27 @@ def mid_prob(market):
     return ((ask + bid) / 2.0) / 100.0
 
 def parse_range(title):
-    t = title.lower().replace("°", "").replace(",", "")
+    """Parse temp range from Kalshi market title."""
+    import re
+    t = title.lower().replace('°', '').replace(',', '').replace('**', '')
     try:
-        if "or above" in t or "or higher" in t:
-            nums = [int(x) for x in t.split() if x.lstrip("-").isdigit()]
-            return (nums[0], 9999) if nums else None
-        if "or below" in t or "or lower" in t:
-            nums = [int(x) for x in t.split() if x.lstrip("-").isdigit()]
-            return (-9999, nums[0]) if nums else None
-        if " to " in t:
-            nums = [int(x) for x in t.split() if x.lstrip("-").isdigit()]
-            return (nums[0], nums[1]) if len(nums) >= 2 else None
+        m = re.search(r'>\s*(\d+)', t)
+        if m: return (int(m.group(1)), 9999)
+        m = re.search(r'<\s*(\d+)', t)
+        if m: return (-9999, int(m.group(1)))
+        m = re.search(r'(\d+)-(\d+)', t)
+        if m: return (int(m.group(1)), int(m.group(2)))
+        m = re.search(r'(\d+)\s+to\s+(\d+)', t)
+        if m: return (int(m.group(1)), int(m.group(2)))
+        if 'or above' in t or 'or higher' in t:
+            nums = re.findall(r'\d+', t)
+            return (int(nums[0]), 9999) if nums else None
+        if 'or below' in t or 'or lower' in t:
+            nums = re.findall(r'\d+', t)
+            return (-9999, int(nums[0])) if nums else None
     except Exception:
         pass
     return None
-
-# ── Weather ───────────────────────────────────────────────────────────────────
-
-_wx = {}
-
-def fetch_weather():
-    global _wx
-    now = datetime.datetime.now(datetime.timezone.utc)
-    seen = set()
-    for series, info in KNOWN_SERIES.items():
-        city, station, lat, lon = info
-        if city in seen:
-            continue
-        seen.add(city)
-        try:
-            r = requests.get(
-                f"https://api.weather.gov/stations/{station}/observations/latest",
-                headers={"User-Agent": "kalshi-agent/1.0 jzrucker@gmail.com"},
-                timeout=10
-            )
-            if r.status_code != 200:
-                continue
-            props   = r.json().get("properties", {})
-            temp_c  = props.get("temperature", {}).get("value")
-            ts      = props.get("timestamp", "")
-            if temp_c is None:
-                continue
-            cur_f   = round(temp_c * 9/5 + 32, 1)
-            try:
-                obs_dt  = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                age_min = int((now - obs_dt).total_seconds() / 60)
-            except Exception:
-                age_min = 60
-            # Estimate today's high from current obs + time-of-day cushion
-            hr_et = (now.hour - 4) % 24
-            cushion = max(0, 14 - max(hr_et, 10))  # 4° at 10am, 0° after 2pm
-            est_high = round(cur_f + cushion, 1)
-            _wx[city] = (est_high, cur_f, age_min)
-            log.info(f"  {city}: {cur_f}F obs, {est_high}F est_high, {age_min}min old")
-        except Exception as e:
-            log.warning(f"  Weather error {city}: {e}")
-
-def get_wx(city):
-    return _wx.get(city, (None, None, None))
 
 # ── Edge ──────────────────────────────────────────────────────────────────────
 
@@ -328,8 +291,7 @@ def run():
 
             rng = parse_range(title)
             if not rng:
-                log.info(f"  SKIP {title} — could not parse range")
-                continue
+                    continue
 
             mkt_p  = mid_prob(mkt)
             true_p = true_prob(est_high, cur_obs, rng, hr_et)
