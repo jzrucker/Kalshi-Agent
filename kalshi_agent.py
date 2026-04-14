@@ -221,73 +221,58 @@ NOAA_STATIONS = {
 
 def fetch_all_weather():
     """
-    Fetch weather for all cities using NOAA weather API.
-    api.weather.gov — free, no key, works from GitHub Actions.
-    First gets the forecast office for each station, then gets forecast.
+    Fetch current observations for all cities using NOAA stations API.
+    Uses only the latest observation endpoint — no forecast call needed.
+    Estimates today's high from current temp + seasonal adjustment.
     """
     global _weather_cache
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+
     for city, station in NOAA_STATIONS.items():
         try:
-            # Step 1: get gridpoint for station
             r = requests.get(
                 f"https://api.weather.gov/stations/{station}/observations/latest",
                 headers={"User-Agent": "kalshi-weather-agent/1.0 jzrucker@gmail.com"},
-                timeout=15
+                timeout=10
             )
             if r.status_code != 200:
-                log.warning(f"  NOAA obs error {city}: {r.status_code}")
+                log.warning(f"  NOAA obs error {city} {station}: {r.status_code}")
                 continue
 
-            props       = r.json().get("properties", {})
-            temp_c      = props.get("temperature", {}).get("value")
-            timestamp   = props.get("timestamp", "")
+            props     = r.json().get("properties", {})
+            temp_c    = props.get("temperature", {}).get("value")
+            timestamp = props.get("timestamp", "")
 
             if temp_c is None:
                 log.warning(f"  NOAA no temp for {city}")
                 continue
 
-            current_f = temp_c * 9/5 + 32
+            current_f = round(temp_c * 9/5 + 32, 1)
 
             # Age of observation
             try:
                 obs_time    = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-                now_utc     = datetime.datetime.now(datetime.timezone.utc)
                 age_minutes = int((now_utc - obs_time).total_seconds() / 60)
             except Exception:
                 age_minutes = 60
 
-            # Step 2: get forecast for this station
-            lat, lon = CITY_COORDS.get(city, (None, None))
-            forecast_max = None
-            if lat and lon:
-                try:
-                    pt = requests.get(
-                        f"https://api.weather.gov/points/{lat},{lon}",
-                        headers={"User-Agent": "kalshi-weather-agent/1.0 jzrucker@gmail.com"},
-                        timeout=15
-                    )
-                    if pt.status_code == 200:
-                        forecast_url = pt.json()["properties"]["forecast"]
-                        fc = requests.get(
-                            forecast_url,
-                            headers={"User-Agent": "kalshi-weather-agent/1.0 jzrucker@gmail.com"},
-                            timeout=15
-                        )
-                        if fc.status_code == 200:
-                            periods = fc.json()["properties"]["periods"]
-                            # Find today's daytime high
-                            for p in periods[:3]:
-                                if p.get("isDaytime", False):
-                                    forecast_max = p["temperature"]
-                                    break
-                except Exception as fe:
-                    log.warning(f"  NOAA forecast error {city}: {fe}")
+            # Estimate today's high from current obs + time-of-day adjustment
+            # Early morning: add more, afternoon: current is near the high
+            hour_utc = now_utc.hour
+            hour_et  = (hour_utc - 4) % 24
+            if hour_et < 8:
+                est_high = current_f + 12
+            elif hour_et < 11:
+                est_high = current_f + 8
+            elif hour_et < 13:
+                est_high = current_f + 4
+            elif hour_et < 15:
+                est_high = current_f + 2
+            else:
+                est_high = current_f  # afternoon — current IS near the high
 
-            if forecast_max is None:
-                forecast_max = current_f + 5  # rough estimate if no forecast
-
-            _weather_cache[city] = (forecast_max, current_f, age_minutes)
-            log.info(f"  {city}: obs={current_f:.1f}F forecast_max={forecast_max:.1f}F age={age_minutes}min")
+            _weather_cache[city] = (round(est_high, 1), current_f, age_minutes)
+            log.info(f"  {city}: obs={current_f}F est_high={est_high}F age={age_minutes}min")
 
         except Exception as e:
             log.warning(f"  NOAA error {city}: {e}")
