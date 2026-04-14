@@ -43,7 +43,7 @@ EMAIL_PASSWORD  = os.environ.get("EMAIL_PASSWORD", "")
 EMAIL_TO        = "jzrucker@gmail.com"
 
 MAX_POSITION    = 25.00   # max $ per trade
-MIN_EDGE        = 0.03    # 3% minimum edge
+MIN_EDGE        = 0.00    # 3% minimum edge
 MAX_POSITIONS   = 20      # max simultaneous positions
 MAX_DATA_AGE    = 180     # minutes
 
@@ -314,17 +314,21 @@ def run():
             log.warning(f"  Data too old ({age_min}min) — skip")
             continue
 
+        log.info(f"  Scoring {len(markets)} markets for {city}...")
         for mkt in markets:
             ticker = mkt.get("ticker", "")
             title  = mkt.get("title", "")
 
             if ticker in positions:
+                log.info(f"  SKIP {ticker} — already in positions")
                 continue
             if len(positions) + len(trades) >= MAX_POSITIONS:
+                log.info("  Max positions hit")
                 break
 
             rng = parse_range(title)
             if not rng:
+                log.info(f"  SKIP {title} — could not parse range")
                 continue
 
             mkt_p  = mid_prob(mkt)
