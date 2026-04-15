@@ -185,12 +185,15 @@ def true_prob(est_high, cur_obs, temp_range, hr_et):
     return 0.08
 
 def place_order(ticker, side, contracts, price_cents):
+    if side == "yes":
+        price_field = {"yes_price": price_cents}
+    else:
+        price_field = {"no_price": price_cents}
     body = {
         "ticker": ticker, "action": "buy", "side": side, "count": int(contracts),
         "type": "limit",
-        "yes_price": price_cents if side == "yes" else 100 - price_cents,
-        "no_price":  100 - price_cents if side == "yes" else price_cents,
         "expiration_ts": int((datetime.datetime.utcnow() + datetime.timedelta(minutes=5)).timestamp()),
+        **price_field,
     }
     result = kpost("/portfolio/orders", body)
     if result:
