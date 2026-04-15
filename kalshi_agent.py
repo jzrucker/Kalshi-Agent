@@ -17,41 +17,36 @@ EMAIL_FROM      = os.environ.get("EMAIL_FROM", "")
 EMAIL_PASSWORD  = os.environ.get("EMAIL_PASSWORD", "")
 EMAIL_TO        = "jzrucker@gmail.com"
 
-MAX_POSITION      = 25.00   # max $ per trade
-MIN_EDGE          = 0.05    # 5% minimum edge
-MAX_POSITIONS     = 30      # max simultaneous open positions
-MAX_DATA_AGE      = 180     # minutes
-MAX_PER_CITY      = 2       # max trades per city per run — spread across more cities
-TODAY_ONLY        = False   # trade today AND tomorrow
+MIN_EDGE        = 0.05   # 5% minimum edge
+MAX_POSITIONS   = 50     # allow up to 50 open positions
+MAX_PER_CITY    = 2      # max 2 trades per city per run
+MAX_DATA_AGE    = 180    # minutes before weather data is stale
 
-# Correct series tickers from Kalshi website + NOAA stations
+# Verified Kalshi series tickers from live site
 KNOWN_SERIES = {
-    # Confirmed active on Kalshi
-    "KXHIGHNY":   ("NYC",          "KNYC", 40.7829,  -73.9654),
-    "KXHIGHMIA":  ("Miami",        "KMIA", 25.7959,  -80.2870),
-    "KXHIGHLAX":  ("LA",           "KLAX", 33.9425,  -118.4081),
-    "KXHIGHAUS":  ("Austin",       "KAUS", 30.1945,  -97.6699),
-    "KXHIGHCHI":  ("Chicago",      "KMDW", 41.7868,  -87.7522),
-    "KXHIGHTPHX": ("Phoenix",      "KPHX", 33.4373,  -112.0078),
-    "KXHIGHTSFO": ("San Francisco","KSFO", 37.6190,  -122.3750),
-    "KXHIGHTATL": ("Atlanta",      "KATL", 33.6407,  -84.4277),
-    "KXHIGHPHIL": ("Philadelphia", "KPHL", 39.8729,  -75.2437),
-    "KXHIGHTDC":  ("DC",           "KDCA", 38.8521,  -77.0377),
-    "KXHIGHDEN":  ("Denver",       "KDEN", 39.8561,  -104.6737),
-    "KXHIGHTSEA": ("Seattle",      "KSEA", 47.4502,  -122.3088),
-    # Also try these
-    "KXHIGHDAL":  ("Dallas",       "KDFW", 32.8998,  -97.0403),
-    "KXHIGHBOS":  ("Boston",       "KBOS", 42.3656,  -71.0096),
-    "KXHIGHHOU":  ("Houston",      "KIAH", 29.9902,  -95.3368),
-    "KXHIGHMSP":  ("Minneapolis",  "KMSP", 44.8848,  -93.2223),
-    "KXHIGHDTW":  ("Detroit",      "KDTW", 42.2162,  -83.3554),
-    "KXHIGHLAS":  ("Las Vegas",    "KLAS", 36.0840,  -115.1537),
-    "KXHIGHNSH":  ("Nashville",    "KBNA", 36.1245,  -86.6782),
-    "KXHIGHKCI":  ("Kansas City",  "KMCI", 39.2976,  -94.7139),
-    # Low temp markets
-    "KXLOWTNYC":  ("NYC Low",      "KNYC", 40.7829,  -73.9654),
-    "KXLOWTCHI":  ("Chicago Low",  "KMDW", 41.7868,  -87.7522),
-    "KXLOWTAUS":  ("Austin Low",   "KAUS", 30.1945,  -97.6699),
+    "KXHIGHNY":   ("NYC",           "KNYC", 40.7829,  -73.9654),
+    "KXHIGHMIA":  ("Miami",         "KMIA", 25.7959,  -80.2870),
+    "KXHIGHLAX":  ("LA",            "KLAX", 33.9425,  -118.4081),
+    "KXHIGHAUS":  ("Austin",        "KAUS", 30.1945,  -97.6699),
+    "KXHIGHCHI":  ("Chicago",       "KMDW", 41.7868,  -87.7522),
+    "KXHIGHTPHX": ("Phoenix",       "KPHX", 33.4373,  -112.0078),
+    "KXHIGHTSFO": ("San Francisco", "KSFO", 37.6190,  -122.3750),
+    "KXHIGHTATL": ("Atlanta",       "KATL", 33.6407,  -84.4277),
+    "KXHIGHPHIL": ("Philadelphia",  "KPHL", 39.8729,  -75.2437),
+    "KXHIGHTDC":  ("DC",            "KDCA", 38.8521,  -77.0377),
+    "KXHIGHDEN":  ("Denver",        "KDEN", 39.8561,  -104.6737),
+    "KXHIGHTSEA": ("Seattle",       "KSEA", 47.4502,  -122.3088),
+    "KXHIGHDAL":  ("Dallas",        "KDFW", 32.8998,  -97.0403),
+    "KXHIGHBOS":  ("Boston",        "KBOS", 42.3656,  -71.0096),
+    "KXHIGHHOU":  ("Houston",       "KIAH", 29.9902,  -95.3368),
+    "KXHIGHMSP":  ("Minneapolis",   "KMSP", 44.8848,  -93.2223),
+    "KXHIGHDTW":  ("Detroit",       "KDTW", 42.2162,  -83.3554),
+    "KXHIGHLAS":  ("Las Vegas",     "KLAS", 36.0840,  -115.1537),
+    "KXHIGHNSH":  ("Nashville",     "KBNA", 36.1245,  -86.6782),
+    "KXHIGHKCI":  ("Kansas City",   "KMCI", 39.2976,  -94.7139),
+    "KXLOWTNYC":  ("NYC Low",       "KNYC", 40.7829,  -73.9654),
+    "KXLOWTCHI":  ("Chicago Low",   "KMDW", 41.7868,  -87.7522),
+    "KXLOWTAUS":  ("Austin Low",    "KAUS", 30.1945,  -97.6699),
 }
 
 def make_headers(method, path):
@@ -94,71 +89,67 @@ def get_positions():
     return {p["ticker"]: p for p in d.get("market_positions", [])} if d else {}
 
 def discover_markets():
-    today_str = datetime.datetime.now().strftime("%b %#d").upper()  # e.g. "APR 15"
-    today_alt = datetime.datetime.now().strftime("%-d").lstrip("0")  # day without leading zero
-    found = {}
+    """Find all open markets, filtered to today and tomorrow only."""
+    now        = datetime.datetime.utcnow()
+    today_utc  = now.date()
+    cutoff     = today_utc + datetime.timedelta(days=2)
+    found      = {}
     for series, info in KNOWN_SERIES.items():
         d = kget("/markets", params={"series_ticker": series, "status": "open", "limit": 100})
         if not d:
             continue
         mkts = d.get("markets", [])
-        if not mkts:
-            continue
-        # Filter to today only if TODAY_ONLY is set
-        # Only include today's and tomorrow's markets — skip yesterday/settled
-        now        = datetime.datetime.utcnow()
-        today_utc  = now.date()
-        tomorrow   = today_utc + datetime.timedelta(days=1)
-        valid_mkts = []
+        valid = []
         for m in mkts:
             close = m.get("close_time", "")
             try:
-                close_dt = datetime.datetime.fromisoformat(close.replace("Z", "+00:00"))
-                close_d  = close_dt.date()
-                if close_d >= today_utc:
-                    valid_mkts.append(m)
+                close_d = datetime.datetime.fromisoformat(close.replace("Z", "+00:00")).date()
+                if today_utc <= close_d < cutoff:
+                    valid.append(m)
             except Exception:
-                valid_mkts.append(m)  # include if can't parse
-        if valid_mkts:
-            found[series] = valid_mkts
-            log.info(f"  {series} ({info[0]}): {len(valid_mkts)} valid markets")
+                valid.append(m)
+        if valid:
+            found[series] = valid
+            log.info(f"  {series} ({info[0]}): {len(valid)} markets")
     log.info(f"Total: {len(found)} series, {sum(len(v) for v in found.values())} markets")
     return found
 
-def mid_prob(market):
+def get_real_price(ticker):
     """
-    Get real market probability from orderbook_fp endpoint.
-    Kalshi orderbook: yes_dollars = YES bids, no_dollars = NO bids.
-    Mid = (best_yes_bid + (1 - best_no_bid)) / 2
-    Returns None if no liquidity found.
+    Get real market price from Kalshi orderbook.
+    Returns float 0-1 (e.g. 0.07 = 7 cents YES) or None if no liquidity.
+    Strict — returns None if price would be exactly 0.50 (no real bids).
     """
-    ticker = market.get("ticker", "")
     try:
-        # Orderbook is public — no auth needed
         r = requests.get(
             f"https://api.elections.kalshi.com/trade-api/v2/markets/{ticker}/orderbook",
             timeout=5
         )
-        if r.status_code == 200:
-            ob = r.json().get("orderbook_fp", {})
-            yes_bids = ob.get("yes_dollars", [])  # [[price_dollars, size], ...]
-            no_bids  = ob.get("no_dollars", [])
-            if yes_bids and no_bids:
-                best_yes = float(yes_bids[0][0])   # dollars, e.g. 0.07
-                best_no  = float(no_bids[0][0])    # dollars
-                yes_ask_implied = 1.0 - best_no
-                mid = (best_yes + yes_ask_implied) / 2.0
-                return round(mid, 4)
-            elif yes_bids:
-                return round(float(yes_bids[0][0]), 4)
-            elif no_bids:
-                return round(1.0 - float(no_bids[0][0]), 4)
-    except Exception as e:
+        if r.status_code != 200:
+            return None
+        ob = r.json().get("orderbook_fp", {})
+        yes_bids = ob.get("yes_dollars", [])
+        no_bids  = ob.get("no_dollars", [])
+        if yes_bids and no_bids:
+            best_yes = float(yes_bids[0][0])
+            best_no  = float(no_bids[0][0])
+            mid = (best_yes + (1.0 - best_no)) / 2.0
+            # Reject if rounds to exactly 0.50 — no real market
+            if abs(mid - 0.50) < 0.005:
+                return None
+            return round(mid, 4)
+        elif yes_bids:
+            p = float(yes_bids[0][0])
+            return None if abs(p - 0.50) < 0.005 else round(p, 4)
+        elif no_bids:
+            p = 1.0 - float(no_bids[0][0])
+            return None if abs(p - 0.50) < 0.005 else round(p, 4)
+    except Exception:
         pass
-    # No orderbook data — skip this market entirely
     return None
 
 def parse_range(title):
+    """Parse temperature range from Kalshi market title."""
     t = title.lower()
     for ch in ["°", ",", "*"]:
         t = t.replace(ch, "")
@@ -184,10 +175,7 @@ def parse_range(title):
 _wx = {}
 
 def fetch_weather():
-    """
-    Fetch weather using NOAA stations API.
-    Also attempts to get today's forecast high from NWS gridpoint.
-    """
+    """Fetch current obs + NWS forecast high for all cities."""
     global _wx
     now  = datetime.datetime.now(datetime.timezone.utc)
     seen = set()
@@ -197,7 +185,6 @@ def fetch_weather():
             continue
         seen.add(city)
         try:
-            # Current observation
             r = requests.get(
                 f"https://api.weather.gov/stations/{station}/observations/latest",
                 headers={"User-Agent": "kalshi-agent/1.0 jzrucker@gmail.com"},
@@ -217,44 +204,31 @@ def fetch_weather():
             except Exception:
                 age_min = 60
 
-            # Try to get NWS forecast high for today
+            # NWS forecast high
             est_high = None
             try:
-                pt = requests.get(
-                    f"https://api.weather.gov/points/{lat},{lon}",
-                    headers={"User-Agent": "kalshi-agent/1.0 jzrucker@gmail.com"},
-                    timeout=8
-                )
+                pt = requests.get(f"https://api.weather.gov/points/{lat},{lon}",
+                    headers={"User-Agent": "kalshi-agent/1.0 jzrucker@gmail.com"}, timeout=8)
                 if pt.status_code == 200:
-                    fc_url = pt.json()["properties"]["forecastHourly"]
-                    fc = requests.get(
-                        fc_url,
-                        headers={"User-Agent": "kalshi-agent/1.0 jzrucker@gmail.com"},
-                        timeout=8
-                    )
+                    fc = requests.get(pt.json()["properties"]["forecastHourly"],
+                        headers={"User-Agent": "kalshi-agent/1.0 jzrucker@gmail.com"}, timeout=8)
                     if fc.status_code == 200:
                         periods = fc.json()["properties"]["periods"]
                         today   = datetime.datetime.now().date()
-                        today_temps = []
-                        for p in periods:
-                            start = datetime.datetime.fromisoformat(p["startTime"]).date()
-                            if start == today:
-                                today_temps.append(p["temperature"])
-                        if today_temps:
-                            est_high = max(today_temps)
-                            log.info(f"  {city}: {cur_f}F obs, {est_high}F NWS forecast high, {age_min}min old")
+                        temps   = [p["temperature"] for p in periods
+                                   if datetime.datetime.fromisoformat(p["startTime"]).date() == today]
+                        if temps:
+                            est_high = max(temps)
             except Exception:
                 pass
 
             if est_high is None:
-                # Fallback: obs + time-of-day cushion
                 hr_et    = (now.hour - 4) % 24
                 cushion  = max(0, 14 - max(hr_et, 10))
                 est_high = round(cur_f + cushion, 1)
-                log.info(f"  {city}: {cur_f}F obs, {est_high}F est_high (cushion), {age_min}min old")
 
             _wx[city] = (est_high, cur_f, age_min)
-
+            log.info(f"  {city}: {cur_f}F obs, {est_high}F high, {age_min}min old")
         except Exception as e:
             log.warning(f"  Weather error {city}: {e}")
 
@@ -262,10 +236,11 @@ def get_wx(city):
     return _wx.get(city, (None, None, None))
 
 def true_prob(est_high, cur_obs, temp_range, hr_et):
+    """Estimate true probability based on forecast vs range."""
     if est_high is None:
         return None
     low, high = temp_range
-    ref = max(cur_obs, est_high) if hr_et >= 14 and cur_obs is not None else est_high
+    ref = max(cur_obs, est_high) if hr_et >= 14 and cur_obs else est_high
     if high == 9999:
         diff = ref - low
     elif low == -9999:
@@ -279,6 +254,27 @@ def true_prob(est_high, cur_obs, temp_range, hr_et):
     if diff >= -3: return 0.35
     if diff >= -5: return 0.20
     return 0.08
+
+def size_order(mkt_p, edge, balance):
+    """
+    Size by expected payout, not cost.
+    Long shots: risk small amount, big payout.
+    Near 50/50: normal Kelly sizing.
+    """
+    if mkt_p <= 0.10:
+        # Sub 10c — risk ~$3, get up to $50 payout
+        contracts = min(50, max(1, int(3.0 / max(mkt_p, 0.01))))
+    elif mkt_p <= 0.25:
+        # 10-25c — risk ~$6
+        contracts = min(25, max(1, int(6.0 / max(mkt_p, 0.01))))
+    else:
+        # Closer to 50/50 — Kelly
+        p = mkt_p + edge
+        q = 1 - p
+        f = max(0, (p - q) * 0.5)
+        dollars   = min(f * balance, 25.0)
+        contracts = max(1, int(dollars))
+    return contracts
 
 def place_order(ticker, side, contracts, price_cents):
     if side == "yes":
@@ -315,17 +311,17 @@ def send_email(subject, body):
 
 def run():
     log.info("=" * 60)
-    log.info(f"KALSHI WEATHER AGENT v2 | {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    log.info(f"KALSHI WEATHER AGENT v3 | {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
     log.info("=" * 60)
 
     balance   = get_balance()
     positions = get_positions()
-    log.info(f"Balance: ${balance:.2f} | Positions: {len(positions)} | Min edge: {MIN_EDGE*100:.0f}%")
+    log.info(f"Balance: ${balance:.2f} | Open positions: {len(positions)} | Min edge: {MIN_EDGE*100:.0f}%")
 
-    log.info("Fetching weather (with NWS forecast)...")
+    log.info("Fetching weather...")
     fetch_weather()
 
-    log.info("Discovering today's markets...")
+    log.info("Discovering markets...")
     all_markets = discover_markets()
 
     hr_et    = (datetime.datetime.utcnow().hour - 4) % 24
@@ -340,44 +336,36 @@ def run():
         city, station, lat, lon = info
         est_high, cur_obs, age_min = get_wx(city)
 
-        log.info(f"\n-- {city} | est_high={est_high} cur={cur_obs} age={age_min}min --")
-
         if est_high is None:
-            log.warning("  No weather data — skip")
             continue
         if age_min is not None and age_min > MAX_DATA_AGE:
-            log.warning(f"  Data too old ({age_min}min) — skip")
             continue
 
-        city_trades = 0
-
-        # Sort markets by edge potential — highest abs(diff from 50) first
-        # Sort markets: today's first (more accurate forecast), then tomorrow
+        # Sort: today's markets first
         today_date = datetime.datetime.now().strftime("%Y-%m-%d")
-        markets_sorted = sorted(markets, key=lambda m: (
-            0 if today_date in m.get("close_time","") else 1
-        ))
+        markets_sorted = sorted(markets, key=lambda m: 0 if today_date in m.get("close_time","") else 1)
+
+        city_trades = 0
+        log.info(f"\n-- {city} | high={est_high}F cur={cur_obs}F --")
 
         for mkt in markets_sorted:
             ticker = mkt.get("ticker", "")
             title  = mkt.get("title", "")
-            is_today = today_date in mkt.get("close_time", "")
 
             if ticker in positions:
                 continue
             if len(positions) + len(trades) >= MAX_POSITIONS:
-                log.info("  Max total positions hit")
+                log.info("  Max positions reached")
                 break
             if city_trades >= MAX_PER_CITY:
-                log.info(f"  Max {MAX_PER_CITY} trades for {city} this run")
                 break
 
             rng = parse_range(title)
             if not rng:
                 continue
 
-            # Get real market price — skip if stale 50/50
-            mkt_p = mid_prob(mkt)
+            # Get real price from orderbook — skip if no liquidity or stale 50/50
+            mkt_p = get_real_price(ticker)
             if mkt_p is None:
                 skipped += 1
                 continue
@@ -400,51 +388,27 @@ def run():
                 skipped += 1
                 continue
 
-            q         = 1 - p
-            f         = max(0, (p - q) * 0.5)
-
-            # Size by PAYOUT not cost
-            # Low probability bets (< 10c) get small dollar cost, big payout
-            # Higher probability bets get larger dollar cost
-            if mkt_p <= 0.10:
-                # Long shot — bet small, payout is large
-                # Risk at most $3 on a sub-10c market
-                contracts = min(25, max(1, int(3.0 / max(mkt_p, 0.01))))
-            elif mkt_p <= 0.25:
-                # Moderate long shot — risk up to $5
-                contracts = min(25, max(1, int(5.0 / max(mkt_p, 0.01))))
-            else:
-                # Closer to 50/50 — normal kelly sizing
-                size      = min(f * balance, MAX_POSITION)
-                size      = max(1.0, size)
-                contracts = max(1, int(size))
-
-            # Cap payout at $50 for sub-10c markets, $25 otherwise
-            max_payout = 50 if mkt_p <= 0.10 else 25
-            contracts  = min(contracts, max_payout)
-
-            # mkt_p is in dollars (0-1), convert to cents for order
-            price_c   = max(1, min(99, int(mkt_p * 100) + (1 if side == "yes" else 0)))
+            contracts = size_order(mkt_p, edge, balance)
+            price_c   = max(1, min(99, round(mkt_p * 100) + (1 if side == "yes" else 0)))
+            cost      = contracts * mkt_p
 
             result = place_order(ticker, side, contracts, price_c)
             if result:
-                cost      = contracts * price_c / 100.0
                 deployed += cost
                 positions[ticker] = result
                 city_trades += 1
-                trades.append(f"  {side.upper()} {contracts}x {city} | {title[:40]} | edge={edge:+.2f} ${cost:.2f}")
+                trades.append(f"  {side.upper()} {contracts}x {city} | {title[:40]} | edge={edge:+.2f} cost=${cost:.2f}")
 
     final_bal = get_balance()
     subject   = f"{'No trades' if not trades else str(len(trades))+' trades'} | Kalshi | {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"
     body      = (
-        f"Kalshi Weather Agent v2\n{'='*40}\n"
+        f"Kalshi Weather Agent v3\n{'='*40}\n"
         f"Time:     {datetime.datetime.now().strftime('%Y-%m-%d %H:%M ET')}\n"
         f"Balance:  ${final_bal:.2f}\n"
         f"Deployed: ${deployed:.2f}\n\n"
         f"TRADES ({len(trades)}):\n" + ("\n".join(trades) if trades else "  None") +
-        f"\n\nSkipped (stale/no edge): {skipped}\n"
-        f"Series: {len(all_markets)} | Min edge: {MIN_EDGE*100:.0f}% | Max/trade: ${MAX_POSITION:.0f} | Max/city: {MAX_PER_CITY}\n"
-        f"Today only: {TODAY_ONLY}\n"
+        f"\n\nSkipped (no price/edge): {skipped}\n"
+        f"Series scanned: {len(all_markets)} | Min edge: {MIN_EDGE*100:.0f}%\n"
     )
     log.info(f"\n{body}")
     send_email(subject, body)
