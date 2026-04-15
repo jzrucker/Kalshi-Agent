@@ -119,33 +119,39 @@ def discover_markets():
     log.info(f"Total: {len(found)} series, {sum(len(v) for v in found.values())} markets")
     return found
 
-def get_real_price(market):
+def mid_prob(market):
     """
-    Get real bid/ask from orderbook, not stale mid price.
-    Falls back to market yes_bid/yes_ask if orderbook fails.
+    Get real market probability from orderbook.
+    Falls back to market yes_ask/yes_bid.
+    Returns None if truly no price data available.
     """
     ticker = market.get("ticker", "")
+    # Try orderbook first for real prices
     try:
         d = kget(f"/markets/{ticker}/orderbook")
-        if d and d.get("orderbook"):
-            ob = d["orderbook"]
-            yes_bids = ob.get("yes", [])
+        if d:
+            ob = d.get("orderbook", {})
+            yes_bids = ob.get("yes", [])  # [[price, size], ...]
             no_bids  = ob.get("no", [])
-            if yes_bids:
-                best_yes_bid = yes_bids[0][0]  # price of best yes bid
-                return best_yes_bid / 100.0
-    except Exception:
+            if yes_bids and no_bids:
+                best_yes_bid = yes_bids[0][0]   # best price someone pays for YES
+                best_no_bid  = no_bids[0][0]    # best price someone pays for NO
+                # YES price = what you pay to buy YES
+                # NO bid tells us implied YES ask = 100 - no_bid
+                yes_ask_implied = 100 - best_no_bid
+                mid = (best_yes_bid + yes_ask_implied) / 2.0
+                return mid / 100.0
+            elif yes_bids:
+                return yes_bids[0][0] / 100.0
+            elif no_bids:
+                return (100 - no_bids[0][0]) / 100.0
+    except Exception as e:
         pass
-    # Fallback to market data
-    ask = market.get("yes_ask", 50)
-    bid = market.get("yes_bid", 50)
-    return ((ask + bid) / 2.0) / 100.0
-
-def mid_prob(market):
+    # Fall back to market data
     ask = market.get("yes_ask", 50)
     bid = market.get("yes_bid", 50)
     if ask == 50 and bid == 50:
-        return None  # stale — skip
+        return None
     return ((ask + bid) / 2.0) / 100.0
 
 def parse_range(title):
