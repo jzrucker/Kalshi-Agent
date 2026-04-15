@@ -24,28 +24,34 @@ MAX_DATA_AGE      = 180     # minutes
 MAX_PER_CITY      = 2       # max trades per city per run — spread across more cities
 TODAY_ONLY        = False   # trade today AND tomorrow
 
+# Correct series tickers from Kalshi website + NOAA stations
 KNOWN_SERIES = {
-    "KXHIGHNY":  ("NYC",          "KNYC", 40.7829, -73.9654),
-    "KXHIGHCHI": ("Chicago",      "KMDW", 41.7868, -87.7522),
-    "KXHIGHMIA": ("Miami",        "KMIA", 25.7959, -80.2870),
-    "KXHIGHDEN": ("Denver",       "KDEN", 39.8561, -104.6737),
-    "KXHIGHAUS": ("Austin",       "KAUS", 30.1945, -97.6699),
-    "KXHIGHLA":  ("LA",           "KLAX", 33.9425, -118.4081),
-    "KXHIGHATL": ("Atlanta",      "KATL", 33.6407, -84.4277),
-    "KXHIGHDAL": ("Dallas",       "KDFW", 32.8998, -97.0403),
-    "KXHIGHBOS": ("Boston",       "KBOS", 42.3656, -71.0096),
-    "KXHIGHPHX": ("Phoenix",      "KPHX", 33.4373, -112.0078),
-    "KXHIGHSEA": ("Seattle",      "KSEA", 47.4502, -122.3088),
-    "KXHIGHHOU": ("Houston",      "KIAH", 29.9902, -95.3368),
-    "KXHIGHMSP": ("Minneapolis",  "KMSP", 44.8848, -93.2223),
-    "KXHIGHDTW": ("Detroit",      "KDTW", 42.2162, -83.3554),
-    "KXHIGHPHL": ("Philadelphia", "KPHL", 39.8729, -75.2437),
-    "KXHIGHDCA": ("DC",           "KDCA", 38.8521, -77.0377),
-    "KXHIGHCLT": ("Charlotte",    "KCLT", 35.2140, -80.9431),
-    "KXHIGHLAS": ("Las Vegas",    "KLAS", 36.0840, -115.1537),
-    "KXHIGHPDX": ("Portland",     "KPDX", 45.5898, -122.5951),
-    "KXHIGHNSH": ("Nashville",    "KBNA", 36.1245, -86.6782),
-    "KXHIGHKCI": ("Kansas City",  "KMCI", 39.2976, -94.7139),
+    # Confirmed active on Kalshi
+    "KXHIGHNY":   ("NYC",          "KNYC", 40.7829,  -73.9654),
+    "KXHIGHMIA":  ("Miami",        "KMIA", 25.7959,  -80.2870),
+    "KXHIGHLAX":  ("LA",           "KLAX", 33.9425,  -118.4081),
+    "KXHIGHAUS":  ("Austin",       "KAUS", 30.1945,  -97.6699),
+    "KXHIGHCHI":  ("Chicago",      "KMDW", 41.7868,  -87.7522),
+    "KXHIGHTPHX": ("Phoenix",      "KPHX", 33.4373,  -112.0078),
+    "KXHIGHTSFO": ("San Francisco","KSFO", 37.6190,  -122.3750),
+    "KXHIGHTATL": ("Atlanta",      "KATL", 33.6407,  -84.4277),
+    "KXHIGHPHIL": ("Philadelphia", "KPHL", 39.8729,  -75.2437),
+    "KXHIGHTDC":  ("DC",           "KDCA", 38.8521,  -77.0377),
+    "KXHIGHDEN":  ("Denver",       "KDEN", 39.8561,  -104.6737),
+    "KXHIGHTSEA": ("Seattle",      "KSEA", 47.4502,  -122.3088),
+    # Also try these
+    "KXHIGHDAL":  ("Dallas",       "KDFW", 32.8998,  -97.0403),
+    "KXHIGHBOS":  ("Boston",       "KBOS", 42.3656,  -71.0096),
+    "KXHIGHHOU":  ("Houston",      "KIAH", 29.9902,  -95.3368),
+    "KXHIGHMSP":  ("Minneapolis",  "KMSP", 44.8848,  -93.2223),
+    "KXHIGHDTW":  ("Detroit",      "KDTW", 42.2162,  -83.3554),
+    "KXHIGHLAS":  ("Las Vegas",    "KLAS", 36.0840,  -115.1537),
+    "KXHIGHNSH":  ("Nashville",    "KBNA", 36.1245,  -86.6782),
+    "KXHIGHKCI":  ("Kansas City",  "KMCI", 39.2976,  -94.7139),
+    # Low temp markets
+    "KXLOWTNYC":  ("NYC Low",      "KNYC", 40.7829,  -73.9654),
+    "KXLOWTCHI":  ("Chicago Low",  "KMDW", 41.7868,  -87.7522),
+    "KXLOWTAUS":  ("Austin Low",   "KAUS", 30.1945,  -97.6699),
 }
 
 def make_headers(method, path):
@@ -346,9 +352,16 @@ def run():
         city_trades = 0
 
         # Sort markets by edge potential — highest abs(diff from 50) first
-        for mkt in markets:
+        # Sort markets: today's first (more accurate forecast), then tomorrow
+        today_date = datetime.datetime.now().strftime("%Y-%m-%d")
+        markets_sorted = sorted(markets, key=lambda m: (
+            0 if today_date in m.get("close_time","") else 1
+        ))
+
+        for mkt in markets_sorted:
             ticker = mkt.get("ticker", "")
             title  = mkt.get("title", "")
+            is_today = today_date in mkt.get("close_time", "")
 
             if ticker in positions:
                 continue
@@ -389,9 +402,27 @@ def run():
 
             q         = 1 - p
             f         = max(0, (p - q) * 0.5)
-            size      = min(f * balance, MAX_POSITION)
-            size      = max(1.0, size)
-            contracts = max(1, int(size))
+
+            # Size by PAYOUT not cost
+            # Low probability bets (< 10c) get small dollar cost, big payout
+            # Higher probability bets get larger dollar cost
+            if mkt_p <= 0.10:
+                # Long shot — bet small, payout is large
+                # Risk at most $3 on a sub-10c market
+                contracts = min(25, max(1, int(3.0 / max(mkt_p, 0.01))))
+            elif mkt_p <= 0.25:
+                # Moderate long shot — risk up to $5
+                contracts = min(25, max(1, int(5.0 / max(mkt_p, 0.01))))
+            else:
+                # Closer to 50/50 — normal kelly sizing
+                size      = min(f * balance, MAX_POSITION)
+                size      = max(1.0, size)
+                contracts = max(1, int(size))
+
+            # Cap payout at $50 for sub-10c markets, $25 otherwise
+            max_payout = 50 if mkt_p <= 0.10 else 25
+            contracts  = min(contracts, max_payout)
+
             # mkt_p is in dollars (0-1), convert to cents for order
             price_c   = max(1, min(99, int(mkt_p * 100) + (1 if side == "yes" else 0)))
 
