@@ -121,33 +121,35 @@ def discover_markets():
 
 def mid_prob(market):
     """
-    Get real market probability from orderbook.
-    Falls back to market yes_ask/yes_bid.
-    Returns None if truly no price data available.
+    Get real market probability from orderbook_fp endpoint.
+    Kalshi orderbook: yes_dollars = YES bids, no_dollars = NO bids.
+    Mid = (best_yes_bid + (1 - best_no_bid)) / 2
+    Returns None if no liquidity found.
     """
     ticker = market.get("ticker", "")
-    # Try orderbook first for real prices
     try:
-        d = kget(f"/markets/{ticker}/orderbook")
-        if d:
-            ob = d.get("orderbook", {})
-            yes_bids = ob.get("yes", [])  # [[price, size], ...]
-            no_bids  = ob.get("no", [])
+        # Orderbook is public — no auth needed
+        r = requests.get(
+            f"https://api.elections.kalshi.com/trade-api/v2/markets/{ticker}/orderbook",
+            timeout=5
+        )
+        if r.status_code == 200:
+            ob = r.json().get("orderbook_fp", {})
+            yes_bids = ob.get("yes_dollars", [])  # [[price_dollars, size], ...]
+            no_bids  = ob.get("no_dollars", [])
             if yes_bids and no_bids:
-                best_yes_bid = yes_bids[0][0]   # best price someone pays for YES
-                best_no_bid  = no_bids[0][0]    # best price someone pays for NO
-                # YES price = what you pay to buy YES
-                # NO bid tells us implied YES ask = 100 - no_bid
-                yes_ask_implied = 100 - best_no_bid
-                mid = (best_yes_bid + yes_ask_implied) / 2.0
-                return mid / 100.0
+                best_yes = float(yes_bids[0][0])   # dollars, e.g. 0.07
+                best_no  = float(no_bids[0][0])    # dollars
+                yes_ask_implied = 1.0 - best_no
+                mid = (best_yes + yes_ask_implied) / 2.0
+                return round(mid, 4)
             elif yes_bids:
-                return yes_bids[0][0] / 100.0
+                return round(float(yes_bids[0][0]), 4)
             elif no_bids:
-                return (100 - no_bids[0][0]) / 100.0
+                return round(1.0 - float(no_bids[0][0]), 4)
     except Exception as e:
         pass
-    # Fall back to market data
+    # Fall back to market object prices
     ask = market.get("yes_ask", 50)
     bid = market.get("yes_bid", 50)
     if ask == 50 and bid == 50:
@@ -395,6 +397,7 @@ def run():
             size      = min(f * balance, MAX_POSITION)
             size      = max(1.0, size)
             contracts = max(1, int(size))
+            # mkt_p is in dollars (0-1), convert to cents for order
             price_c   = max(1, min(99, int(mkt_p * 100) + (1 if side == "yes" else 0)))
 
             result = place_order(ticker, side, contracts, price_c)
