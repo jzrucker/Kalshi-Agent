@@ -19,9 +19,9 @@ EMAIL_TO        = "jzrucker@gmail.com"
 
 MAX_POSITION      = 25.00   # max $ per trade
 MIN_EDGE          = 0.05    # 5% minimum edge
-MAX_POSITIONS     = 20      # max simultaneous open positions
+MAX_POSITIONS     = 30      # max simultaneous open positions
 MAX_DATA_AGE      = 180     # minutes
-MAX_PER_CITY      = 3       # max trades per city per run
+MAX_PER_CITY      = 2       # max trades per city per run — spread across more cities
 TODAY_ONLY        = False   # trade today AND tomorrow
 
 KNOWN_SERIES = {
@@ -149,12 +149,8 @@ def mid_prob(market):
                 return round(1.0 - float(no_bids[0][0]), 4)
     except Exception as e:
         pass
-    # Fall back to market object prices
-    ask = market.get("yes_ask", 50)
-    bid = market.get("yes_bid", 50)
-    if ask == 50 and bid == 50:
-        return None
-    return ((ask + bid) / 2.0) / 100.0
+    # No orderbook data — skip this market entirely
+    return None
 
 def parse_range(title):
     t = title.lower()
@@ -370,7 +366,6 @@ def run():
             # Get real market price — skip if stale 50/50
             mkt_p = mid_prob(mkt)
             if mkt_p is None:
-                log.info(f"  SKIP {title[:40]} — stale 50/50 price")
                 skipped += 1
                 continue
 
