@@ -359,6 +359,11 @@ def run():
     positions = get_positions()
     log.info(f"Balance: ${balance:.2f} | Open positions: {len(positions)} | Min edge: {MIN_EDGE*100:.0f}%")
 
+    # DEBUG: log one raw position object so we know the field names for top-up logic
+    if positions:
+        sample_ticker = next(iter(positions))
+        log.info(f"DEBUG position sample [{sample_ticker}]: {positions[sample_ticker]}")
+
     log.info("Fetching weather...")
     fetch_weather()
 
