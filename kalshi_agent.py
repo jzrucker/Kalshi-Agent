@@ -18,7 +18,7 @@ EMAIL_PASSWORD  = os.environ.get("EMAIL_PASSWORD", "")
 EMAIL_TO        = "jzrucker@gmail.com"
 
 MIN_EDGE        = 0.05   # 5% minimum edge
-MAX_POSITIONS   = 50     # allow up to 50 open positions
+MAX_POSITIONS   = 200    # max open positions across all markets
 MAX_PER_CITY    = 2      # max 2 trades per city per run
 MAX_DATA_AGE    = 180    # minutes before weather data is stale
 
@@ -397,7 +397,7 @@ def run():
             if ticker in positions:
                 continue
             if len(positions) + len(trades) >= MAX_POSITIONS:
-                log.info("  Max positions reached")
+                log.info(f"  Max positions reached ({len(positions)} open + {len(trades)} this run = {MAX_POSITIONS})")
                 break
             if city_trades >= MAX_PER_CITY:
                 break
