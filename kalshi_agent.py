@@ -19,7 +19,6 @@ EMAIL_TO        = "jzrucker@gmail.com"
 
 MIN_EDGE        = 0.05   # 5% minimum edge
 MAX_POSITIONS   = 200    # max open positions across all markets
-MAX_PER_CITY    = 2      # max 2 trades per city per run
 MAX_DATA_AGE    = 180    # minutes before weather data is stale
 
 # Verified Kalshi series tickers from live site
@@ -387,7 +386,6 @@ def run():
         today_date = datetime.datetime.now().strftime("%Y-%m-%d")
         markets_sorted = sorted(markets, key=lambda m: 0 if today_date in m.get("close_time","") else 1)
 
-        city_trades = 0
         log.info(f"\n-- {city} | high={est_high}F cur={cur_obs}F --")
 
         for mkt in markets_sorted:
@@ -398,8 +396,6 @@ def run():
                 continue
             if len(positions) + len(trades) >= MAX_POSITIONS:
                 log.info(f"  Max positions reached ({len(positions)} open + {len(trades)} this run = {MAX_POSITIONS})")
-                break
-            if city_trades >= MAX_PER_CITY:
                 break
 
             rng = parse_range(title)
@@ -438,25 +434,28 @@ def run():
             if result:
                 deployed += cost
                 positions[ticker] = result
-                city_trades += 1
                 trades.append(
                     f"  {side.upper()} {contracts}x {city} | {title[:40]} | "
                     f"edge={edge:+.2f} mkt={mkt_p:.2f} depth={available} cost=${cost:.2f} max_payout=${contracts:.0f}"
                 )
 
     final_bal = get_balance()
-    subject   = f"{'No trades' if not trades else str(len(trades))+' trades'} | Kalshi | {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"
     body      = (
-        f"Kalshi Weather Agent v4\n{'='*40}\n"
+        f"Kalshi Weather Agent v4 — Daily Summary\n{'='*40}\n"
         f"Time:     {datetime.datetime.now().strftime('%Y-%m-%d %H:%M ET')}\n"
         f"Balance:  ${final_bal:.2f}\n"
-        f"Deployed: ${deployed:.2f}\n\n"
+        f"Deployed today: ${deployed:.2f}\n\n"
         f"TRADES ({len(trades)}):\n" + ("\n".join(trades) if trades else "  None") +
         f"\n\nSkipped (no price/edge): {skipped}\n"
         f"Series scanned: {len(all_markets)} | Min edge: {MIN_EDGE*100:.0f}%\n"
     )
     log.info(f"\n{body}")
-    send_email(subject, body)
+
+    # Email once per day at ~6pm ET, only if trades were placed today
+    now_et_hour = (datetime.datetime.utcnow().hour - 4) % 24
+    if trades and 17 <= now_et_hour <= 19:
+        subject = f"Kalshi Daily | {len(trades)} trades | ${deployed:.2f} deployed | {datetime.datetime.now().strftime('%Y-%m-%d')}"
+        send_email(subject, body)
 
 if __name__ == "__main__":
     run()
