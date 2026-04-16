@@ -116,9 +116,15 @@ def discover_markets():
 
 def get_real_price(ticker):
     """
-    Get real market price from Kalshi orderbook.
-    Returns float 0-1 (e.g. 0.07 = 7 cents YES) or None if no liquidity.
-    Strict — returns None if price would be exactly 0.50 (no real bids).
+    Get real market price AND available depth from Kalshi orderbook.
+
+    Returns:
+        (price: float 0-1, available_contracts: int)
+        price is None if no real market / stale 50-50.
+        available_contracts is how many we can fill at the best price level.
+        We return the YES-side depth since we're almost always buying YES.
+        If buying NO, caller should use no_available instead — but for now
+        we size against the YES depth conservatively.
     """
     try:
         r = requests.get(
@@ -126,27 +132,39 @@ def get_real_price(ticker):
             timeout=5
         )
         if r.status_code != 200:
-            return None
+            return None, 0
         ob = r.json().get("orderbook_fp", {})
         yes_bids = ob.get("yes_dollars", [])
         no_bids  = ob.get("no_dollars", [])
+
+        # Helper: parse [price, qty] — qty may be absent on thin books
+        def parse_level(level):
+            price = float(level[0])
+            qty   = int(level[1]) if len(level) > 1 else 999  # 999 = unknown, don't constrain
+            return price, qty
+
         if yes_bids and no_bids:
-            best_yes = float(yes_bids[0][0])
-            best_no  = float(no_bids[0][0])
-            mid = (best_yes + (1.0 - best_no)) / 2.0
-            # Reject if rounds to exactly 0.50 — no real market
+            best_yes_p, yes_qty = parse_level(yes_bids[0])
+            best_no_p,  no_qty  = parse_level(no_bids[0])
+            mid = (best_yes_p + (1.0 - best_no_p)) / 2.0
             if abs(mid - 0.50) < 0.005:
-                return None
-            return round(mid, 4)
+                return None, 0
+            # Return YES-side depth; if we end up buying NO, we'll use no_qty
+            return round(mid, 4), yes_qty
         elif yes_bids:
-            p = float(yes_bids[0][0])
-            return None if abs(p - 0.50) < 0.005 else round(p, 4)
+            p, qty = parse_level(yes_bids[0])
+            if abs(p - 0.50) < 0.005:
+                return None, 0
+            return round(p, 4), qty
         elif no_bids:
-            p = 1.0 - float(no_bids[0][0])
-            return None if abs(p - 0.50) < 0.005 else round(p, 4)
+            p, qty = parse_level(no_bids[0])
+            implied = 1.0 - p
+            if abs(implied - 0.50) < 0.005:
+                return None, 0
+            return round(implied, 4), qty
     except Exception:
         pass
-    return None
+    return None, 0
 
 def parse_range(title):
     """Parse temperature range from Kalshi market title."""
@@ -255,26 +273,50 @@ def true_prob(est_high, cur_obs, temp_range, hr_et):
     if diff >= -5: return 0.20
     return 0.08
 
-def size_order(mkt_p, edge, balance):
+def size_order(mkt_p, edge, balance, available_contracts):
     """
-    Size by expected payout, not cost.
-    Long shots: risk small amount, big payout.
-    Near 50/50: normal Kelly sizing.
+    Size by dollar risk budget, scaled to probability.
+    Maximizes position within budget and available market depth.
+
+    Risk tiers (in dollars):
+        <  3%  →  $3   risk  (deep longshot, ~$100+ payout)
+        3-7%   →  $8   risk  (~$115-265 payout)
+        7-15%  →  $25  risk  (~$165-355 payout)
+        15-30% →  $40  risk  (~$130-265 payout)
+        30%+   →  Kelly off balance, capped at $50 risk
+
+    Contracts = risk_dollars / price_per_contract.
+    Capped by:
+      1. available_contracts in the orderbook at best price
+      2. Hard max $75 risk per market (safety valve)
     """
-    if mkt_p <= 0.10:
-        # Sub 10c — risk ~$3, get up to $50 payout
-        contracts = min(50, max(1, int(3.0 / max(mkt_p, 0.01))))
-    elif mkt_p <= 0.25:
-        # 10-25c — risk ~$6
-        contracts = min(25, max(1, int(6.0 / max(mkt_p, 0.01))))
+    if mkt_p <= 0.03:
+        risk_dollars = 3.0
+    elif mkt_p <= 0.07:
+        risk_dollars = 8.0
+    elif mkt_p <= 0.15:
+        risk_dollars = 25.0
+    elif mkt_p <= 0.30:
+        risk_dollars = 40.0
     else:
-        # Closer to 50/50 — Kelly
+        # Kelly for near-50/50 markets
         p = mkt_p + edge
         q = 1 - p
         f = max(0, (p - q) * 0.5)
-        dollars   = min(f * balance, 25.0)
-        contracts = max(1, int(dollars))
-    return contracts
+        risk_dollars = min(f * balance, 50.0)
+
+    # Never risk more than $75 on a single market regardless of tier
+    risk_dollars = min(risk_dollars, 75.0)
+
+    # Contracts = how many $1-payout shares we can buy at this price
+    ideal_contracts = max(1, int(risk_dollars / max(mkt_p, 0.01)))
+
+    # Cap to whatever the book actually has at this price level
+    # available_contracts=999 means we didn't get depth info — don't constrain
+    if available_contracts < 999:
+        ideal_contracts = min(ideal_contracts, available_contracts)
+
+    return ideal_contracts
 
 def place_order(ticker, side, contracts, price_cents):
     if side == "yes":
@@ -311,7 +353,7 @@ def send_email(subject, body):
 
 def run():
     log.info("=" * 60)
-    log.info(f"KALSHI WEATHER AGENT v3 | {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    log.info(f"KALSHI WEATHER AGENT v4 | {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
     log.info("=" * 60)
 
     balance   = get_balance()
@@ -364,8 +406,8 @@ def run():
             if not rng:
                 continue
 
-            # Get real price from orderbook — skip if no liquidity or stale 50/50
-            mkt_p = get_real_price(ticker)
+            # Get real price + orderbook depth
+            mkt_p, available = get_real_price(ticker)
             if mkt_p is None:
                 skipped += 1
                 continue
@@ -382,13 +424,13 @@ def run():
             else:
                 side, edge, p = "no", edge_n, 1 - true_p
 
-            log.info(f"  {title[:50]} | mkt={mkt_p:.2f} true={true_p:.2f} edge={edge:+.2f} [{side}]")
+            log.info(f"  {title[:50]} | mkt={mkt_p:.2f} true={true_p:.2f} edge={edge:+.2f} [{side}] depth={available}")
 
             if abs(edge) < MIN_EDGE:
                 skipped += 1
                 continue
 
-            contracts = size_order(mkt_p, edge, balance)
+            contracts = size_order(mkt_p, edge, balance, available)
             price_c   = max(1, min(99, round(mkt_p * 100) + (1 if side == "yes" else 0)))
             cost      = contracts * mkt_p
 
@@ -397,12 +439,15 @@ def run():
                 deployed += cost
                 positions[ticker] = result
                 city_trades += 1
-                trades.append(f"  {side.upper()} {contracts}x {city} | {title[:40]} | edge={edge:+.2f} cost=${cost:.2f}")
+                trades.append(
+                    f"  {side.upper()} {contracts}x {city} | {title[:40]} | "
+                    f"edge={edge:+.2f} mkt={mkt_p:.2f} depth={available} cost=${cost:.2f} max_payout=${contracts:.0f}"
+                )
 
     final_bal = get_balance()
     subject   = f"{'No trades' if not trades else str(len(trades))+' trades'} | Kalshi | {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"
     body      = (
-        f"Kalshi Weather Agent v3\n{'='*40}\n"
+        f"Kalshi Weather Agent v4\n{'='*40}\n"
         f"Time:     {datetime.datetime.now().strftime('%Y-%m-%d %H:%M ET')}\n"
         f"Balance:  ${final_bal:.2f}\n"
         f"Deployed: ${deployed:.2f}\n\n"
